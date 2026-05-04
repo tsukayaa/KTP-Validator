@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.env
+venv/
+.venv/
+
+# Model weights & cache (large files)
+models/
+cache/
+
+# Results (generated plots)
+results/
+
+# Data (not tracked — place images manually)
+data/
+
+# OS
+.DS_Store
+Thumbs.db
