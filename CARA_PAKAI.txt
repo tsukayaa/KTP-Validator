@@ -1,0 +1,207 @@
+================================================================
+  KTP SELFIE BINARY CLASSIFIER — PANDUAN PENGGUNAAN
+================================================================
+
+Project ini mendeteksi apakah sebuah foto selfie mengandung
+kartu identitas atau tidak (Layer 1 pipeline — bukan OCR).
+
+Ada 2 pendekatan yang bisa dipakai:
+  - Approach 1 : MobileNetV3-Small (deep learning, transfer learning)
+  - Approach 2 : XGBoost + fitur CV buatan tangan (klasik, cepat)
+
+Keduanya jalan di CPU saja, tidak butuh GPU.
+
+----------------------------------------------------------------
+  STRUKTUR FOLDER PROJECT
+----------------------------------------------------------------
+
+KTP Validator/
+├── config.py                  <-- semua hyperparameter di sini
+├── shared/                    <-- utilitas bersama (loader, metrics, dll)
+├── approach1_mobilenet/       <-- semua kode MobileNet
+├── approach2_xgboost/         <-- semua kode XGBoost
+├── run_mobilenet.py           <-- jalankan training MobileNet
+├── run_xgboost.py             <-- jalankan training XGBoost
+├── predict.py                 <-- prediksi 1 gambar
+├── compare.py                 <-- bandingkan kedua approach
+└── requirements.txt           <-- daftar library yang dibutuhkan
+
+Folder yang perlu kamu buat sendiri:
+  data/
+  ├── positives/   <-- foto selfie DENGAN kartu identitas
+  └── negatives/   <-- foto selfie TANPA kartu identitas
+
+----------------------------------------------------------------
+  LANGKAH 1 — INSTALL DEPENDENCIES
+----------------------------------------------------------------
+
+Pastikan Python 3.8+ sudah terinstall, lalu jalankan:
+
+  pip install -r requirements.txt
+
+Catatan: saat pertama kali training MobileNet, PyTorch akan
+otomatis download bobot pretrained (~10 MB). Satu kali saja.
+
+----------------------------------------------------------------
+  LANGKAH 2 — SIAPKAN DATASET
+----------------------------------------------------------------
+
+Buat folder data/ di root project, lalu isi:
+
+  data/
+  ├── positives/   <-- masukkan foto yang ADA kartu identitas
+  └── negatives/   <-- masukkan foto yang TIDAK ADA kartu identitas
+
+Format gambar yang didukung: .jpg .jpeg .png .bmp .webp
+
+Jumlah dataset saat ini baru ~50 gambar → sistem otomatis
+pakai 5-Fold Cross Validation. Kalau sudah ≥ 200 gambar,
+sistem otomatis ganti ke split 70% train / 20% val / 10% test.
+(Tidak perlu setting manual, sudah otomatis.)
+
+----------------------------------------------------------------
+  LANGKAH 3 — TRAINING
+----------------------------------------------------------------
+
+Jalankan salah satu atau keduanya:
+
+  -- Training MobileNetV3-Small --
+  python run_mobilenet.py
+
+  Dengan opsi tambahan:
+  python run_mobilenet.py --data_dir ./data --epochs 50 --batch_size 16
+
+  -- Training XGBoost --
+  python run_xgboost.py
+
+  Dengan opsi tambahan:
+  python run_xgboost.py --data_dir ./data --n_estimators 300
+
+Setelah training selesai:
+  - Model tersimpan di folder  models/
+  - Grafik hasil tersimpan di  results/
+  - Fitur XGBoost di-cache di  cache/  (run berikutnya lebih cepat)
+
+----------------------------------------------------------------
+  LANGKAH 4 — PREDIKSI SATU GAMBAR
+----------------------------------------------------------------
+
+Setelah training, kamu bisa prediksi satu gambar:
+
+  -- Pakai MobileNet --
+  python predict.py foto.jpg --approach mobilenet
+
+  -- Pakai MobileNet + TTA (lebih akurat, sedikit lebih lambat) --
+  python predict.py foto.jpg --approach mobilenet --tta
+
+  -- Pakai XGBoost --
+  python predict.py foto.jpg --approach xgboost
+
+  -- Pakai XGBoost + augmentasi rotasi --
+  python predict.py foto.jpg --approach xgboost --tta
+
+  -- Pakai keduanya sekaligus + lihat perbandingan --
+  python predict.py foto.jpg --approach both
+
+Contoh output:
+  ════════════════════════════════════════════
+    Prediction: HAS_CARD
+    Confidence: 0.9231
+    Approach  : MobileNetV3 (TTA)
+    TTA       : enabled
+    Time      : 412ms
+  ════════════════════════════════════════════
+
+  HAS_CARD  = foto mengandung kartu identitas
+  NO_CARD   = foto tidak mengandung kartu identitas
+
+----------------------------------------------------------------
+  LANGKAH 5 — BANDINGKAN KEDUA APPROACH
+----------------------------------------------------------------
+
+Untuk training + evaluasi keduanya sekaligus dan melihat
+perbandingan metrik secara berdampingan:
+
+  python compare.py --data_dir ./data
+
+Output akan menampilkan tabel seperti ini:
+
+  ══════════════════════════════════════════════════════
+    Metric        MobileNetV3          XGBoost
+  ──────────────────────────────────────────────────────
+    Accuracy      0.XXXX ± 0.XXXX      0.XXXX ± 0.XXXX
+    Precision     0.XXXX ± 0.XXXX      0.XXXX ± 0.XXXX
+    Recall        0.XXXX ± 0.XXXX      0.XXXX ± 0.XXXX
+    F1            0.XXXX ± 0.XXXX      0.XXXX ± 0.XXXX
+    AUC-ROC       0.XXXX ± 0.XXXX      0.XXXX ± 0.XXXX
+  ══════════════════════════════════════════════════════
+
+Grafik perbandingan disimpan di results/comparison.png
+
+----------------------------------------------------------------
+  UBAH HYPERPARAMETER
+----------------------------------------------------------------
+
+Semua nilai default ada di file config.py.
+Kamu bisa edit langsung di sana, atau override lewat CLI.
+
+Yang paling sering diubah:
+
+  config.py → MobileNetConfig:
+    epochs        = 30     (tambah kalau dataset besar)
+    batch_size    = 8      (turunkan kalau RAM terbatas)
+    patience      = 7      (early stopping, epochs tanpa improve)
+    freeze_backbone = True (False = fine-tune seluruh jaringan)
+
+  config.py → XGBoostConfig:
+    n_estimators  = 200    (jumlah pohon)
+    max_depth     = 6      (kedalaman tiap pohon)
+
+----------------------------------------------------------------
+  TIPS & CATATAN
+----------------------------------------------------------------
+
+1. Dataset kecil (< 200 gambar):
+   Sistem otomatis pakai 5-Fold CV. Ini sudah optimal untuk
+   dataset kecil karena setiap gambar dipakai untuk validasi.
+
+2. Foto hitam-putih:
+   Keduanya handle otomatis. MobileNet konversi ke 3-channel RGB,
+   XGBoost ekstrak fitur dari grayscale dari awal.
+
+3. Foto miring / rotasi:
+   MobileNet: training dengan augmentasi 360°, inferensi dengan TTA.
+   XGBoost: fitur LBP sudah rotation-invariant secara matematis.
+
+4. Imbalanced dataset (positif vs negatif tidak seimbang):
+   Otomatis terdeteksi dan ditangani dengan class weighting.
+   Tidak perlu setting manual.
+
+5. Cache fitur XGBoost:
+   Fitur diekstrak sekali dan disimpan di folder cache/.
+   Kalau dataset berubah, cache otomatis diperbarui.
+   Untuk paksa re-ekstrak: python run_xgboost.py --no_cache
+
+6. Baseline referensi:
+   CLIP zero-shot mencapai ~86% akurasi pada dataset ini.
+   Gunakan angka ini sebagai patokan minimum target.
+
+----------------------------------------------------------------
+  TROUBLESHOOTING
+----------------------------------------------------------------
+
+Error: "Positives directory not found"
+  → Pastikan folder data/positives/ dan data/negatives/ ada.
+
+Error: "No trained model found"
+  → Jalankan training dulu sebelum predict.
+
+Error saat install torch:
+  → Coba: pip install torch torchvision --index-url
+          https://download.pytorch.org/whl/cpu
+
+MobileNet download bobot gagal:
+  → Cek koneksi internet. Bobot didownload dari PyTorch Hub
+    dan disimpan di cache lokal PyTorch (tidak di folder project).
+
+================================================================
