@@ -8,6 +8,8 @@ Cara pakai:
     python gather_dataset.py
 
 Pastikan file .env ada di folder yang sama dengan isi:
+    KAGGLE_TOKEN=KGAT_xxxxxxxxxxxx   ← token baru (mulai KGAT_)
+    atau format lama:
     KAGGLE_TOKEN={"username":"xxx","key":"yyy"}
 """
 
@@ -38,21 +40,32 @@ if not token_raw:
     print("ERROR: KAGGLE_TOKEN tidak ditemukan di .env")
     sys.exit(1)
 
-try:
-    token = json.loads(token_raw)
-    kaggle_username = token["username"]
-    kaggle_key      = token["key"]
-except Exception:
-    print("ERROR: Format KAGGLE_TOKEN harus JSON: {\"username\":\"...\",\"key\":\"...\"}")
-    sys.exit(1)
-
-# Tulis ke ~/.kaggle/kaggle.json supaya library kaggle bisa baca
 kaggle_dir = Path.home() / ".kaggle"
 kaggle_dir.mkdir(exist_ok=True)
 kaggle_json = kaggle_dir / "kaggle.json"
-kaggle_json.write_text(json.dumps({"username": kaggle_username, "key": kaggle_key}))
-kaggle_json.chmod(0o600)
-print(f"[OK] Kaggle credentials disimpan ke {kaggle_json}")
+
+if token_raw.startswith("KGAT_"):
+    # Format token baru Kaggle (bearer token) — set langsung via env var
+    os.environ["KAGGLE_TOKEN"] = token_raw
+    # kaggle library versi baru membaca KAGGLE_TOKEN langsung dari env
+    # Tulis juga ke kaggle.json dengan format yang dikenali versi baru
+    kaggle_json.write_text(json.dumps({"token": token_raw}))
+    kaggle_json.chmod(0o600)
+    print(f"[OK] Kaggle token (KGAT_) di-set via environment variable")
+else:
+    # Format lama: JSON {"username":"...","key":"..."}
+    try:
+        token = json.loads(token_raw)
+        kaggle_username = token["username"]
+        kaggle_key      = token["key"]
+    except Exception:
+        print("ERROR: Format KAGGLE_TOKEN tidak dikenali.")
+        print("  Format baru : KAGGLE_TOKEN=KGAT_xxxxxxxxxxxx")
+        print("  Format lama : KAGGLE_TOKEN={\"username\":\"...\",\"key\":\"...\"}")
+        sys.exit(1)
+    kaggle_json.write_text(json.dumps({"username": kaggle_username, "key": kaggle_key}))
+    kaggle_json.chmod(0o600)
+    print(f"[OK] Kaggle credentials disimpan ke {kaggle_json}")
 
 # ── 2. Import kaggle ──────────────────────────────────────────────────────────
 
