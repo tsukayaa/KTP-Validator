@@ -1,66 +1,87 @@
 # PaddleOCR Notes — Untuk Copilot di Laptop Kantor
 
-> Pesan dari Claude (laptop pribadi) ke Copilot (laptop kantor). Project ini OCR KTP Indonesia. Model PaddleOCR sudah didownload di folder `paddle_models/`, tapi performa awal jelek. Berikut diagnosa dan rekomendasi.
+> Pesan dari Claude (laptop pribadi) ke Copilot (laptop kantor). Project ini OCR KTP Indonesia. Model mobile ada di repo, model server (det_server 109 MB) didownload terpisah via GitHub Release. Berikut diagnosa, panduan pakai per-model, dan rekomendasi konfigurasi.
 
 ---
 
-## 1. Diagnosa Masalah Performa Jelek
+## 0. Download det_server Model (GitHub Release)
 
-Yang sekarang ada di repo:
-- `ch_PP-OCRv4_det_infer/` — detection model (Chinese pack)
-- `ch_PP-OCRv4_rec_infer/` — **recognition model Chinese** ← biang kerok
-- `ch_ppocr_mobile_v2.0_cls_infer/` — angle classifier (script-agnostic, OK)
+Model `ch_PP-OCRv4_det_server_infer` (109 MB) tidak masuk repo karena melebihi limit GitHub 100 MB. Dihosting di GitHub Releases.
 
-**Masalah utama:** `ch_PP-OCRv4_rec` adalah recognition model untuk **Bahasa China**. Dictionary-nya berisi ~6,625 karakter Hanzi + sedikit Latin. Saat dipakai untuk KTP (teks Latin murni A-Z, 0-9, punctuation), model harus "memilih" karakter Latin di antara ribuan Hanzi yang tidak relevan → confidence drop, char swap, hasil ngaco.
+### Download (jalankan dari root project):
 
-**Detection model (`ch_PP-OCRv4_det`) sebenarnya OK** untuk Latin karena tugas detection cuma cari bounding box teks, tidak baca isinya — relatif script-agnostic.
+```bash
+# Windows (Git Bash / PowerShell)
+mkdir -p paddle_models/ch_PP-OCRv4_det_server_infer
+
+curl -L -o paddle_models/ch_PP-OCRv4_det_server_infer/inference.pdiparams \
+  "https://github.com/tsukayaa/KTP-Validator/releases/download/paddle-models-v1/inference_det_server.pdiparams"
+
+curl -L -o paddle_models/ch_PP-OCRv4_det_server_infer/inference.pdiparams.info \
+  "https://github.com/tsukayaa/KTP-Validator/releases/download/paddle-models-v1/inference_det_server.pdiparams.info"
+
+curl -L -o paddle_models/ch_PP-OCRv4_det_server_infer/inference.pdmodel \
+  "https://github.com/tsukayaa/KTP-Validator/releases/download/paddle-models-v1/inference_det_server.pdmodel"
+```
+
+Kalau domain GitHub bisa diakses dari laptop kantor (git clone bisa), URL release ini juga bisa.
+
+Kalau tidak butuh server det, skip — pakai mobile det (`ch_PP-OCRv4_det_infer`) dari repo, akurasi sedikit lebih rendah tapi works.
 
 ---
 
-## 2. Solusi: Ganti Recognition Model ke English/Latin
+## 1. Model Library Lengkap
 
-### Download model yang benar:
+Total 5 model di `paddle_models/`:
 
-**Option A — English (paling cocok untuk KTP):**
-```
-URL: https://paddleocr.bj.bcebos.com/PP-OCRv4/english/en_PP-OCRv4_rec_infer.tar
-```
-- Dictionary: ~95 karakter (Latin + digit + punctuation)
-- Fokus, akurasi tinggi untuk teks Latin
-- Size: ~9 MB
+| Folder | Tipe | Script | Size | Lokasi | Speed (CPU) |
+|--------|------|--------|------|--------|-------------|
+| `ch_PP-OCRv4_det_infer/` | Detection | agnostic | 4.5 MB | repo | Cepat |
+| `ch_PP-OCRv4_det_server_infer/` | Detection | agnostic | 109 MB | **GitHub Release** (download manual, lihat sec 0) | Lambat (3-5x) |
+| `ch_PP-OCRv4_rec_infer/` | Recognition | Chinese | 11 MB | repo | Cepat |
+| `en_PP-OCRv4_rec_infer/` | Recognition | **Latin** ⭐ | 7 MB | repo | Cepat |
+| `ch_ppocr_mobile_v2.0_cls_infer/` | Classifier (0°/180°) | agnostic | 2 MB | repo | Sangat cepat |
 
-**Option B — Latin multi-language (kalau perlu support karakter ber-aksen):**
-```
-URL: https://paddleocr.bj.bcebos.com/PP-OCRv3/multilingual/latin_PP-OCRv3_rec_infer.tar
-```
-- Catatan: cuma ada versi v3 untuk Latin, bukan v4
-- Untuk KTP Indonesia tidak perlu (Bahasa Indonesia di KTP tidak pakai aksen)
-
-**Rekomendasi: Option A (`en_PP-OCRv4_rec`)**. KTP Indonesia tidak ada aksen, semua Latin standar + digit.
-
-### Step ganti:
-
-1. Download `en_PP-OCRv4_rec_infer.tar` ke `paddle_models/`
-2. Extract: `tar -xf en_PP-OCRv4_rec_infer.tar`
-3. Hapus `.tar` setelah extract (atau biarkan, akan di-gitignore)
-4. Folder hasil: `paddle_models/en_PP-OCRv4_rec_infer/`
-5. Update path di kode OCR (lihat section 4)
-
-**Catatan untuk Claude di laptop pribadi:** sudah didownload-kan, tinggal pull dari GitHub.
+⭐ = utama untuk KTP
 
 ---
 
-## 3. Pertimbangan Server vs Mobile Model
+## 2. Diagnosa Masalah Performa Jelek (yang sudah kamu temukan)
 
-Yang sudah didownload adalah versi **mobile** (kompak, cepat, akurasi cukup).
+Awalnya di-init pakai `ch_PP-OCRv4_rec` (Chinese rec model). Dictionary-nya ~6,625 karakter Hanzi + sedikit Latin. Untuk KTP (teks Latin murni A-Z, 0-9, punctuation), model harus disambiguate karakter Latin di antara ribuan Hanzi yang tidak relevan → **confidence drop, char swap, hasil ngaco**.
 
-Kalau butuh akurasi maksimum dan punya budget compute:
+**Detection model (`ch_PP-OCRv4_det`) OK** untuk Latin — detection cari bounding box, script-agnostic.
+
+**Fix:** ganti `rec_model_dir` ke `en_PP-OCRv4_rec_infer`. Impact ~30-50% akurasi naik.
+
+---
+
+## 3. Kombinasi Model — Pilih Sesuai Kebutuhan
+
+### 🚀 KOMBINASI A — Default (Recommended Start)
+**Akurasi baik, cepat, untuk produksi.**
+```python
+det_model_dir = 'paddle_models/ch_PP-OCRv4_det_infer'
+rec_model_dir = 'paddle_models/en_PP-OCRv4_rec_infer'      # Latin!
+cls_model_dir = 'paddle_models/ch_ppocr_mobile_v2.0_cls_infer'
 ```
-ch_PP-OCRv4_det_server_infer  (~110 MB)
-ch_PP-OCRv4_rec_server_infer  (~88 MB, Chinese — skip ini)
-```
+- Speed: ~0.3-0.5 detik/gambar CPU
+- Akurasi: cukup tinggi untuk KTP normal
 
-Untuk KTP, **mobile sudah cukup**. Server model overkill, dan tidak ada `en_server`.
+### 🎯 KOMBINASI B — Max Accuracy (Server Detection)
+**Untuk KTP buram, foto jelek, text kecil yang missed.**
+```python
+det_model_dir = 'paddle_models/ch_PP-OCRv4_det_server_infer'  # SERVER det
+rec_model_dir = 'paddle_models/en_PP-OCRv4_rec_infer'         # Latin (mobile)
+cls_model_dir = 'paddle_models/ch_ppocr_mobile_v2.0_cls_infer'
+```
+- Speed: ~1-3 detik/gambar CPU (3-5x lebih lambat)
+- Akurasi: detection lebih jago nemu text box kecil, recognition tetap Latin-optimal
+- **Trade-off worth it kalau CPU mampu atau pakai GPU**
+
+### Rekomendasi tahapan:
+1. Mulai dari **Kombinasi A** — baseline cepat
+2. Kalau text kecil/KTP buram sering missed, upgrade ke **Kombinasi B** (det server)
 
 ---
 
@@ -72,7 +93,7 @@ from paddleocr import PaddleOCR
 ocr = PaddleOCR(
     use_angle_cls=True,
     lang='en',                                                   # Latin/English
-    det_model_dir='paddle_models/ch_PP-OCRv4_det_infer',         # detection OK pakai Chinese
+    det_model_dir='paddle_models/ch_PP-OCRv4_det_infer',         # ganti ke det_server untuk akurasi max
     rec_model_dir='paddle_models/en_PP-OCRv4_rec_infer',         # WAJIB en, bukan ch
     cls_model_dir='paddle_models/ch_ppocr_mobile_v2.0_cls_infer',
     use_gpu=False,                                               # set True kalau ada CUDA
@@ -171,33 +192,63 @@ PaddleOCR kembalikan list of `(box, (text, confidence))`. Untuk KTP:
 
 ---
 
-## 7. Quick Wins Checklist
+## 7. Benchmarking Workflow (Pilih Model Terbaik untuk Dataset KTP-mu)
+
+Untuk pilih kombinasi terbaik, jangan tebak — measure di dataset KTP nyata:
+
+```python
+combos = {
+    'A_baseline': ('ch_PP-OCRv4_det_infer', 'en_PP-OCRv4_rec_infer'),
+    'B_server_det': ('ch_PP-OCRv4_det_server_infer', 'en_PP-OCRv4_rec_infer'),
+    'C_full_server_ch': ('ch_PP-OCRv4_det_server_infer', 'ch_PP-OCRv4_rec_server_infer'),
+}
+
+for name, (det, rec) in combos.items():
+    ocr = PaddleOCR(det_model_dir=f'paddle_models/{det}',
+                    rec_model_dir=f'paddle_models/{rec}',
+                    cls_model_dir='paddle_models/ch_ppocr_mobile_v2.0_cls_infer',
+                    use_angle_cls=True, lang='en', show_log=False)
+    # run on test set, compute: field-level CER, NIK accuracy, latency
+    ...
+```
+
+Metrik yang relevan untuk KTP:
+- **NIK accuracy** (exact match 16 digit) — paling kritikal
+- **Field-level CER** (Character Error Rate per field)
+- **Latency** per image
+- **Coverage** — % field yang berhasil terdeteksi sama sekali (recall)
+
+---
+
+## 8. Quick Wins Checklist
 
 Urut dari yang paling impactful:
 
-- [ ] **Ganti rec model ke `en_PP-OCRv4_rec`** (impact: 30-50% akurasi naik)
+- [x] **Ganti rec model ke `en_PP-OCRv4_rec`** (impact: 30-50% akurasi naik) ✅ sudah ada di repo
 - [ ] **Resize input ke 1920px** (impact: speed 3-5x + akurasi)
 - [ ] **CLAHE preprocessing** (impact: 10-20% akurasi pada foto buruk)
 - [ ] **Perspective correction** kalau KTP sering miring (impact: 15-30%)
 - [ ] **Tune `det_db_unclip_ratio=1.6`** supaya char tidak terpotong (impact: 5-10%)
 - [ ] **Field-level postprocessing** (O→0, I→1, validasi NIK 16 digit) (impact: 5-15%)
+- [ ] **Try server det model** kalau akurasi mobile det kurang (impact: 5-15% di image jelek)
 
 ---
 
-## 8. Kalau Masih Jelek
+## 9. Kalau Masih Jelek
 
 Diagnosa lanjutan:
-1. **Visualisasi detection result** — apakah bounding box benar nemu teks? Kalau tidak, masalah di detection (tune `det_db_box_thresh` lebih rendah, atau resolusi input naikkan).
+1. **Visualisasi detection result** — apakah bounding box benar nemu teks? Kalau tidak, masalah di detection (tune `det_db_box_thresh` lebih rendah, atau resolusi input naikkan, atau ganti ke server det).
 2. **Visualisasi recognition per box** — print confidence per box. Box dengan confidence < 0.5 = kandidat masalah preprocessing.
 3. **Crop manual satu field, OCR sendiri** — kalau hasil bagus saat crop manual, masalah di detection (bukan recognition).
 4. **Fallback ke EasyOCR atau Tesseract** untuk benchmark — kalau model lain juga jelek di image yang sama, masalah di kualitas image (preprocessing/sumber foto).
 
 ---
 
-## 9. Resource Links
+## 10. Resource Links
 
 - PaddleOCR docs: https://github.com/PaddlePaddle/PaddleOCR
 - PP-OCRv4 model zoo: https://github.com/PaddlePaddle/PaddleOCR/blob/main/doc/doc_en/models_list_en.md
+- Git LFS docs: https://git-lfs.com/
 - KTP spec (ISO/IEC 7810 ID-1): standar fisik kartu, dipakai untuk perspective correction target ratio
 
 ---
