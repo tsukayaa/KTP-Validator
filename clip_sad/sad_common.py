@@ -48,10 +48,15 @@ _PKG = Path(__file__).resolve().parent
 # ──────────────────────────────────────────────────────────────────────────────
 @dataclass
 class SADConfig:
-    # --- data folders (flat folders of images) ---------------------------------
-    pos_dir: str = str(_PKG / "data" / "positive")          # ~5000 KTP-only  (label +1)
-    neg_dir: str = str(_PKG / "data" / "negative")          # ~500 mixed neg  (label -1)
-    neg_selfie_dir: str = str(_PKG / "data" / "negative_selfie")  # selfie+KTP (label -1, heavier weight)
+    # --- data layout -----------------------------------------------------------
+    #   data_root/<split>/<class>/*.jpg     split in {train, test}
+    #   class in {positive, negative, negative_selfie}
+    data_root: str = str(_PKG / "data")
+    train_split: str = "train"
+    test_split: str = "test"
+    pos_name: str = "positive"                # KTP-only          (label +1)
+    neg_name: str = "negative"                # mixed negatives   (label -1)
+    neg_selfie_name: str = "negative_selfie"  # selfie+KTP        (label -1, heavier weight)
 
     valid_ext: tuple = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
 
@@ -99,15 +104,17 @@ def list_images(folder: str, exts: Iterable[str]) -> list[str]:
     return sorted(str(f) for f in p.rglob("*") if f.suffix.lower() in exts)
 
 
-def build_index(cfg: SADConfig) -> tuple[list[str], np.ndarray, np.ndarray]:
-    """Return (paths, labels, weights).
+def build_index(cfg: SADConfig, split: str) -> tuple[list[str], np.ndarray, np.ndarray]:
+    """Return (paths, labels, weights) for ONE split ('train' or 'test').
 
+    Reads from  data_root/<split>/{positive,negative,negative_selfie}/.
     labels:  +1 for positives (NORMAL), -1 for negatives (ANOMALY)
     weights:  per-sample loss weight (selfie negatives get cfg.selfie_weight)
     """
-    pos = list_images(cfg.pos_dir, cfg.valid_ext)
-    neg = list_images(cfg.neg_dir, cfg.valid_ext)
-    neg_selfie = list_images(cfg.neg_selfie_dir, cfg.valid_ext)
+    base = Path(cfg.data_root) / split
+    pos = list_images(str(base / cfg.pos_name), cfg.valid_ext)
+    neg = list_images(str(base / cfg.neg_name), cfg.valid_ext)
+    neg_selfie = list_images(str(base / cfg.neg_selfie_name), cfg.valid_ext)
 
     # de-dup: a selfie image listed in neg_selfie should not be double-counted if
     # neg_dir is a superset. selfie entries win (heavier weight).
@@ -126,7 +133,7 @@ def build_index(cfg: SADConfig) -> tuple[list[str], np.ndarray, np.ndarray]:
         np.full(len(neg_selfie), cfg.selfie_weight, dtype=np.float32),
     ])
     if not pos:
-        raise RuntimeError(f"No positive images found in {cfg.pos_dir!r}")
+        raise RuntimeError(f"No positive images found in {str(base / cfg.pos_name)!r}")
     return paths, labels, weights
 
 

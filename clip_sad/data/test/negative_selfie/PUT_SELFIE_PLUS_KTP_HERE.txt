@@ -1,0 +1,2 @@
+TEST selfie+KTP (label -1): held-out selfie/person+KTP for evaluation.
+Optional. Put image files here. Real images are gitignored.

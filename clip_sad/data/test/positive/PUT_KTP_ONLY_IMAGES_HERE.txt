@@ -1,0 +1,2 @@
+TEST positives (label +1): held-out KTP-only images for evaluation.
+Put image files here. Real images are gitignored.

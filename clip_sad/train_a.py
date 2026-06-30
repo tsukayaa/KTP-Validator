@@ -31,7 +31,6 @@ from clip_sad.sad_common import (
 
 _PKG = Path(__file__).resolve().parent
 OUT_PATH = str(_PKG / "models" / "clip_sad_A.pt")
-CACHE_PATH = str(_PKG / "cache" / "clip_features_A.pt")
 
 
 def main():
@@ -40,28 +39,31 @@ def main():
     np.random.seed(cfg.random_state)
     torch.set_num_threads(cfg.num_threads)   # use all GKE vCPUs for the CLIP matmul
 
-    paths, labels, weights = build_index(cfg)
-    print(f"dataset: {int((labels==1).sum())} pos / {int((labels==-1).sum())} neg "
-          f"({len(paths)} total)")
+    # ── 1. index + cache CLIP features for BOTH splits (one encoder load) ─────
+    paths_tr, labels_tr, weights_tr = build_index(cfg, cfg.train_split)
+    print(f"train: {int((labels_tr==1).sum())} pos / {int((labels_tr==-1).sum())} neg "
+          f"({len(paths_tr)} total)")
+    cache_tr, clip_bundle = _load_or_build_cache(cfg, paths_tr, cfg.train_split)
+    feats_tr = cache_tr["feats"]                  # [N, 512] L2-normalized, frozen
 
-    # ── 1. cache CLIP features once (the only forward pass over the encoder) ──
-    cache = _load_or_build_cache(cfg, paths)
-    feats = cache["feats"]                       # [N, 512] L2-normalized, frozen
-    labels_t = torch.from_numpy(labels)
-    weights_t = torch.from_numpy(weights)
+    paths_te, labels_te, _ = build_index(cfg, cfg.test_split)
+    print(f"test : {int((labels_te==1).sum())} pos / {int((labels_te==-1).sum())} neg "
+          f"({len(paths_te)} total)")
+    cache_te, _ = _load_or_build_cache(cfg, paths_te, cfg.test_split, clip_bundle)
+    feats_te = cache_te["feats"]
 
-    # ── 2. init head + center ─────────────────────────────────────────────────
-    head = ProjectionHead(feats.shape[1], cfg.proj_dim)
+    # ── 2. init head + center (center from TRAIN forward) ─────────────────────
+    head = ProjectionHead(feats_tr.shape[1], cfg.proj_dim)
     with torch.no_grad():
-        z0 = head(feats)
+        z0 = head(feats_tr)
     center = init_center(z0)
 
     opt = torch.optim.Adam(head.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 
-    ds = TensorDataset(feats, labels_t, weights_t)
+    ds = TensorDataset(feats_tr, torch.from_numpy(labels_tr), torch.from_numpy(weights_tr))
     dl = DataLoader(ds, batch_size=cfg.batch_size, shuffle=True)
 
-    # ── 3. train head with Deep SAD loss ─────────────────────────────────────
+    # ── 3. train head with Deep SAD loss (TRAIN only) ─────────────────────────
     for epoch in range(cfg.epochs):
         head.train()
         running = 0.0
@@ -75,34 +77,41 @@ def main():
         if epoch % 5 == 0 or epoch == cfg.epochs - 1:
             print(f"epoch {epoch:3d}  loss {running/len(ds):.4f}")
 
-    # ── 4. calibrate threshold on the full set ───────────────────────────────
+    # ── 4. calibrate threshold on TRAIN, evaluate on held-out TEST ────────────
     head.eval()
     with torch.no_grad():
-        z_all = head(feats)
-    scores = scores_from_z(z_all, center)
-    threshold = calibrate_threshold(scores, labels, cfg.target_pos_recall)
-    _report(scores, labels, threshold)
+        scores_tr = scores_from_z(head(feats_tr), center)
+        scores_te = scores_from_z(head(feats_te), center)
+    threshold = calibrate_threshold(scores_tr, labels_tr, cfg.target_pos_recall)
+    print("[train]", end=" "); _report(scores_tr, labels_tr, threshold)
+    print("[test ]", end=" "); _report(scores_te, labels_te, threshold)
 
     save_bundle(OUT_PATH, mode="A", cfg=cfg, center=center,
                 threshold=threshold, head=head, visual_state=None)
     print(f"saved -> {OUT_PATH}")
 
 
-def _load_or_build_cache(cfg: SADConfig, paths: list[str]) -> dict:
-    if Path(CACHE_PATH).exists():
-        cache = torch.load(CACHE_PATH, map_location="cpu")
+def _load_or_build_cache(cfg: SADConfig, paths: list[str], split: str,
+                         clip_bundle=None) -> tuple[dict, tuple | None]:
+    """Cache frozen CLIP features per split. Reuses an already-loaded CLIP
+    (clip_bundle) so train+test don't load the encoder twice."""
+    cache_path = str(_PKG / "cache" / f"clip_features_A_{split}.pt")
+    if Path(cache_path).exists():
+        cache = torch.load(cache_path, map_location="cpu")
         if cache.get("paths") == paths:
-            print(f"using cached features: {CACHE_PATH}")
-            return cache
-        print("cache stale (paths changed) -> rebuilding")
-    print("embedding images with frozen CLIP (one-time) ...")
-    model, preprocess = load_clip(cfg)
+            print(f"using cached features: {cache_path}")
+            return cache, clip_bundle
+        print(f"cache stale ({split}, paths changed) -> rebuilding")
+    print(f"embedding {split} images with frozen CLIP (one-time) ...")
+    if clip_bundle is None:
+        clip_bundle = load_clip(cfg)
+    model, preprocess = clip_bundle
     feats = embed_paths(model, preprocess, paths, cfg.device,
                         batch_size=32, num_workers=cfg.num_workers)
-    Path(CACHE_PATH).parent.mkdir(parents=True, exist_ok=True)
+    Path(cache_path).parent.mkdir(parents=True, exist_ok=True)
     cache = {"paths": paths, "feats": feats}
-    torch.save(cache, CACHE_PATH)
-    return cache
+    torch.save(cache, cache_path)
+    return cache, clip_bundle
 
 
 def _report(scores: np.ndarray, labels: np.ndarray, t: float) -> None:

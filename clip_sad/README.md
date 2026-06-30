@@ -42,19 +42,27 @@ python -m clip_sad.stage1_prompts some_image.jpg   # KTP present? -> pass/reject
 
 Inference (`predict.py`) is **identical** for both: `embed -> distance to c -> threshold`.
 
-## Data layout (edit paths in `sad_common.py: SADConfig`)
+## Data layout (edit names/root in `sad_common.py: SADConfig`)
 
 ```
-data/positive/         ~5000 valid KTP-only images          (label +1)
-data/negative/         ~500 mixed negatives                 (label -1)
-data/negative_selfie/  selfie+KTP subset, heavier weight    (label -1)  [optional]
-weights/ViT-B-16.pt    OFFLINE OpenAI CLIP checkpoint
+data/train/positive/         KTP-only images               (label +1)
+data/train/negative/         mixed negatives               (label -1)
+data/train/negative_selfie/  selfie+KTP, heavier weight    (label -1)  [optional]
+data/test/positive/          held-out KTP-only             (label +1)
+data/test/negative/          held-out mixed negatives      (label -1)
+data/test/negative_selfie/   held-out selfie+KTP           (label -1)  [optional]
+weights/ViT-B-16.pt          OFFLINE OpenAI CLIP checkpoint
 ```
+
+The model is trained and the threshold is **calibrated on `train/`**; `test/` is
+a **held-out** set used only for the printed `[test]` accept/reject numbers, so
+those numbers reflect generalization, not memorization.
 
 **Minimal labeling** (≈1 h): you do **not** need to split negatives by every
 type. Only pull the `selfie+KTP` images into `negative_selfie/`; leave SIM/ATM/
 back/etc. mixed in `negative/`. If `negative_selfie/` is empty, version B
-degrades gracefully to plain SAD (no extra weighting).
+degrades gracefully to plain SAD (no extra weighting). `test/` may be small (a
+few hundred each) — it only scores, it doesn't train.
 
 ## Run
 

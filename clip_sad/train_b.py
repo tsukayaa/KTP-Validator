@@ -55,8 +55,8 @@ def main():
     np.random.seed(cfg.random_state)
     torch.set_num_threads(cfg.num_threads)  # pin to the vCPUs GKE gives us (not auto-detect)
 
-    paths, labels, weights = build_index(cfg)
-    print(f"dataset: {int((labels==1).sum())} pos / {int((labels==-1).sum())} neg "
+    paths, labels, weights = build_index(cfg, cfg.train_split)
+    print(f"train: {int((labels==1).sum())} pos / {int((labels==-1).sum())} neg "
           f"({len(paths)} total)")
 
     model, preprocess = load_clip(cfg)
@@ -96,10 +96,19 @@ def main():
             n += len(xb)
         print(f"epoch {epoch:3d}  loss {running/n:.4f}")
 
-    # ── calibrate threshold (against the SAME fixed center used in training) ──
-    scores, labels_eval = _score_all(net, ds, center, cfg)
-    threshold = calibrate_threshold(scores, labels_eval, cfg.target_pos_recall)
-    _report(scores, labels_eval, threshold)
+    # ── calibrate on TRAIN, evaluate on held-out TEST (same fixed center) ─────
+    scores_tr, labels_tr = _score_all(net, ds, center, cfg)
+    threshold = calibrate_threshold(scores_tr, labels_tr, cfg.target_pos_recall)
+
+    paths_te, labels_te_arr, weights_te = build_index(cfg, cfg.test_split)
+    print(f"test : {int((labels_te_arr==1).sum())} pos / {int((labels_te_arr==-1).sum())} neg "
+          f"({len(paths_te)} total)")
+    ds_te = ImageDataset(paths_te, torch.from_numpy(labels_te_arr),
+                         torch.from_numpy(weights_te), preprocess)
+    scores_te, labels_te = _score_all(net, ds_te, center, cfg)
+
+    print("[train]", end=" "); _report(scores_tr, labels_tr, threshold)
+    print("[test ]", end=" "); _report(scores_te, labels_te, threshold)
 
     save_bundle(OUT_PATH, mode="B", cfg=cfg, center=center, threshold=threshold,
                 head=net.head, visual_state=net.clip.visual.state_dict())

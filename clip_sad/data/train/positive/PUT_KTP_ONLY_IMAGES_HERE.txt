@@ -1,0 +1,2 @@
+TRAIN positives (label +1): KTP-only, front side, no person.
+Put image files here (.jpg/.jpeg/.png/.bmp/.webp). Real images are gitignored.

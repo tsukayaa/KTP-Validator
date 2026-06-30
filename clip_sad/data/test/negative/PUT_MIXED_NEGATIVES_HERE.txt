@@ -1,0 +1,2 @@
+TEST negatives (label -1): held-out mixed rejects for evaluation.
+Put image files here. Real images are gitignored.

@@ -1,0 +1,3 @@
+TRAIN selfie+KTP (label -1, heavier loss weight = cfg.selfie_weight).
+Only the selfie/person-holding-KTP-to-camera subset. Optional but recommended.
+Put image files here. Real images are gitignored.

@@ -1,0 +1,3 @@
+TRAIN negatives (label -1): mixed rejects — KTP back, SIM/ATM/other cards,
+person+KTP that is NOT a selfie, etc. (selfie+KTP goes in ../negative_selfie/).
+Put image files here. Real images are gitignored.
