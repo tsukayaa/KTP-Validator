@@ -1,0 +1,18 @@
+# ── never commit confidential data or large binaries ──────────────────────────
+# real KTP images (confidential), CLIP weights, trained bundles, cached features
+data/**/*.jpg
+data/**/*.jpeg
+data/**/*.png
+data/**/*.bmp
+data/**/*.webp
+weights/*.pt
+models/*.pt
+cache/*.pt
+
+# python
+__pycache__/
+*.pyc
+
+# ── but DO keep folder structure + the reminder placeholders ───────────────────
+!**/.gitkeep
+!**/*.txt

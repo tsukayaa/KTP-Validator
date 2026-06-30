@@ -1,0 +1,8 @@
+Put the OFFLINE OpenAI CLIP checkpoint here: ViT-B-16.pt
+
+Source (download ONCE on a connected machine, then copy in — keep this box offline):
+  https://github.com/openai/CLIP
+  clip.load("ViT-B/16") caches to ~/.cache/clip/ViT-B-16.pt -> copy that file here.
+
+sad_common.py expects:  clip_ckpt = "weights/ViT-B-16.pt"
+If you store it elsewhere, edit SADConfig.clip_ckpt or pass --clip_ckpt to predict.

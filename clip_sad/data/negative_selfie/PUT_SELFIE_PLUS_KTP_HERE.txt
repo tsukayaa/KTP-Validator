@@ -1,0 +1,9 @@
+Put ONLY selfie+KTP and person+KTP images here (label -1, HEAVIER weight).
+
+This is the hard reject case (KTP present + person present). Pulling these out
+of the mixed negatives lets Deep SAD push them away from the positive manifold
+with extra force (cfg.selfie_weight, default 3.0).
+
+This is the ~1 hour of minimal labeling: just move the selfie+KTP shots here.
+If you leave this folder empty, training still works (no extra weighting).
+Extensions: .jpg .jpeg .png .bmp .webp
