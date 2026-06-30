@@ -10,6 +10,17 @@ selfie+KTP / person+KTP / KTP back / SIM / ATM /  -> "no"
 other cards / unknown reject cases
 ```
 
+## Stage 1 prompts (zero-shot "is a KTP present?")
+
+`stage1_prompts.py` holds the **pre-selfie-attack** prompt pools (baru.md
+Appendix B). `yes` = a KTP is present (selfie+KTP included on purpose -> it
+passes Stage 1 and is rejected by Stage 2). `no` = no card + paper-document
+hard-negatives (KK/akte). Aggregation is **max per pool**; text encoded once.
+
+```bash
+python -m clip_sad.stage1_prompts some_image.jpg   # KTP present? -> pass/reject
+```
+
 ## Why Deep SAD (not a binary classifier)
 
 - Positives: ~5000, tight & well-sampled. Negatives: ~500, **open-ended** (many
