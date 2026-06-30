@@ -80,6 +80,11 @@ class SADConfig:
     # if negatives are available we instead pick the threshold that maximizes F1.
     target_pos_recall: float = 0.97
 
+    # --- CPU parallelism (GKE gives 6 vCPU) ------------------------------------
+    num_threads: int = 6         # torch intra-op threads for matmul; pin to vCPU count
+                                 # (torch auto-detect misreads the cgroup limit in a pod)
+    num_workers: int = 4         # DataLoader workers for parallel JPEG decode/preprocess
+
     random_state: int = 42
 
 
@@ -145,29 +150,47 @@ def load_clip(cfg: SADConfig):
     return model, preprocess
 
 
+class _PathImageDataset(torch.utils.data.Dataset):
+    """Decode + preprocess one image per item, so a DataLoader can parallelize it."""
+
+    def __init__(self, paths: list[str], preprocess):
+        self.paths = paths
+        self.preprocess = preprocess
+
+    def __len__(self):
+        return len(self.paths)
+
+    def __getitem__(self, i):
+        from PIL import Image
+        img = Image.open(self.paths[i]).convert("RGB")
+        return self.preprocess(img)
+
+
 @torch.no_grad()
 def embed_paths(model, preprocess, paths: list[str], device: str,
-                batch_size: int = 32, log_every: int = 500) -> torch.Tensor:
+                batch_size: int = 32, num_workers: int = 0,
+                log_every: int = 500) -> torch.Tensor:
     """Encode a list of image paths into L2-normalized CLIP features [N, 512].
 
-    Used by version A to cache features once, and by predict.py at inference.
+    Image decode + preprocess run in `num_workers` parallel workers (the serial
+    PIL loop was the dominant cost of version A on a multi-core CPU). Order is
+    preserved (shuffle=False). Used by version A to cache features once, and by
+    predict.py at inference.
     """
-    from PIL import Image
+    from torch.utils.data import DataLoader
+    ds = _PathImageDataset(paths, preprocess)
+    dl = DataLoader(ds, batch_size=batch_size, shuffle=False,
+                    num_workers=num_workers,
+                    persistent_workers=num_workers > 0)
     feats = []
-    batch = []
     done = 0
-    for i, path in enumerate(paths):
-        img = Image.open(path).convert("RGB")
-        batch.append(preprocess(img))
-        if len(batch) == batch_size or i == len(paths) - 1:
-            x = torch.stack(batch).to(device)
-            f = model.encode_image(x).float()
-            f = F.normalize(f, dim=-1)
-            feats.append(f.cpu())
-            done += len(batch)
-            batch = []
-            if log_every and done % log_every < batch_size:
-                print(f"  embedded {done}/{len(paths)}")
+    for x in dl:
+        x = x.to(device)
+        f = F.normalize(model.encode_image(x).float(), dim=-1)
+        feats.append(f.cpu())
+        done += len(x)
+        if log_every and done % log_every < batch_size:
+            print(f"  embedded {done}/{len(paths)}")
     return torch.cat(feats, dim=0)
 
 

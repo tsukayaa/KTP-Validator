@@ -53,7 +53,7 @@ def main():
     cfg = SADConfig()
     torch.manual_seed(cfg.random_state)
     np.random.seed(cfg.random_state)
-    torch.set_num_threads(max(1, torch.get_num_threads()))  # use the CPU cores GKE gives us
+    torch.set_num_threads(cfg.num_threads)  # pin to the vCPUs GKE gives us (not auto-detect)
 
     paths, labels, weights = build_index(cfg)
     print(f"dataset: {int((labels==1).sum())} pos / {int((labels==-1).sum())} neg "
@@ -63,7 +63,9 @@ def main():
     net = FinetuneSAD(model, cfg.proj_dim, cfg.unfreeze_blocks).to(cfg.device)
 
     ds = ImageDataset(paths, torch.from_numpy(labels), torch.from_numpy(weights), preprocess)
-    dl = DataLoader(ds, batch_size=cfg.batch_size, shuffle=True, num_workers=0)
+    dl = DataLoader(ds, batch_size=cfg.batch_size, shuffle=True,
+                    num_workers=cfg.num_workers,
+                    persistent_workers=cfg.num_workers > 0)
 
     # ── center: one forward pass over POSITIVES only, before training ─────────
     center = _init_center_from_positives(net, ds, labels, cfg)
@@ -109,7 +111,8 @@ def _init_center_from_positives(net, ds, labels, cfg) -> torch.Tensor:
     net.eval()
     pos_idx = np.where(labels == 1)[0]
     zs = []
-    dl = DataLoader(_Subset(ds, pos_idx), batch_size=cfg.batch_size)
+    dl = DataLoader(_Subset(ds, pos_idx), batch_size=cfg.batch_size,
+                    num_workers=cfg.num_workers)
     for xb, _, _ in dl:
         zs.append(net(xb.to(cfg.device)).cpu())
     z = torch.cat(zs, dim=0)
@@ -121,7 +124,7 @@ def _score_all(net, ds, center, cfg):
     """Score every image against the FIXED center used during training.
     (Deep SVDD/SAD keeps c constant from init — do not recompute it here.)"""
     net.eval()
-    dl = DataLoader(ds, batch_size=cfg.batch_size)
+    dl = DataLoader(ds, batch_size=cfg.batch_size, num_workers=cfg.num_workers)
     zs, ls = [], []
     for xb, lb, wb in dl:
         zs.append(net(xb.to(cfg.device)).cpu())

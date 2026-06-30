@@ -38,6 +38,7 @@ def main():
     cfg = SADConfig()
     torch.manual_seed(cfg.random_state)
     np.random.seed(cfg.random_state)
+    torch.set_num_threads(cfg.num_threads)   # use all GKE vCPUs for the CLIP matmul
 
     paths, labels, weights = build_index(cfg)
     print(f"dataset: {int((labels==1).sum())} pos / {int((labels==-1).sum())} neg "
@@ -96,7 +97,8 @@ def _load_or_build_cache(cfg: SADConfig, paths: list[str]) -> dict:
         print("cache stale (paths changed) -> rebuilding")
     print("embedding images with frozen CLIP (one-time) ...")
     model, preprocess = load_clip(cfg)
-    feats = embed_paths(model, preprocess, paths, cfg.device, batch_size=32)
+    feats = embed_paths(model, preprocess, paths, cfg.device,
+                        batch_size=32, num_workers=cfg.num_workers)
     Path(CACHE_PATH).parent.mkdir(parents=True, exist_ok=True)
     cache = {"paths": paths, "feats": feats}
     torch.save(cache, CACHE_PATH)
