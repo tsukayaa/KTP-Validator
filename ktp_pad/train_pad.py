@@ -231,12 +231,14 @@ def list_images(d: Path):
 
 
 def build_split(split: str):
+    import time
     X, y, files, names, mps = [], [], [], None, []
     for label, cls in ((1, "positives"), (0, "negatives")):
         d = DATA / split / cls
         imgs = list_images(d)
         print(f"  {split}/{cls}: {len(imgs)} images")
-        for p in imgs:
+        t0 = time.perf_counter()
+        for i, p in enumerate(imgs, 1):
             arr, nm = extract_features(p)
             if arr is None:
                 continue
@@ -245,6 +247,12 @@ def build_split(split: str):
             X.append(arr); y.append(label); files.append(p)
             if names is None:
                 names = nm
+            if i % 10 == 0 or i == len(imgs):
+                elapsed = time.perf_counter() - t0
+                rate = elapsed / i
+                eta = rate * (len(imgs) - i)
+                print(f"    [{split}/{cls}] {i}/{len(imgs)}  "
+                      f"({rate*1000:.0f} ms/img, ETA {eta:.0f}s)", flush=True)
     if not X:
         raise RuntimeError(f"no images found under {DATA/split} — run split_dataset.py first")
     return np.array(X), np.array(y), files, names, np.array(mps)
@@ -330,7 +338,7 @@ def main():
                   scale_pos_weight=neg / max(pos, 1), verbose=-1, seed=SEED)
     print("training LightGBM ...")
     booster = lgb.train(params, dtr, num_boost_round=3000, valid_sets=[dvl],
-                        callbacks=[lgb.early_stopping(100), lgb.log_evaluation(0)])
+                        callbacks=[lgb.early_stopping(100), lgb.log_evaluation(50)])
 
     thr = best_f1_threshold(yv, booster.predict(Xv))      # threshold tuned on val, not test
 
