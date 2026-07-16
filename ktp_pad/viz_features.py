@@ -56,9 +56,21 @@ def fft_spectrum(gray: np.ndarray) -> np.ndarray:
     return np.log1p(np.abs(np.fft.fftshift(np.fft.fft2(g))))
 
 
-def srm_grid_residual(gray: np.ndarray) -> np.ndarray:
+def srm_grid_residual(gray: np.ndarray, zoom: int = 220) -> np.ndarray:
+    """Zoomed center patch, not the full image.
+
+    The screen-grid signal this kernel targets has a period of ~2-4 px. Rendered
+    at full crop size (up to 1024px) into a small subplot, matplotlib's display
+    resampling averages the alternating +/- pattern into flat gray -- the data
+    isn't flat, the *downsampled render* is. Zooming into a small patch keeps
+    each residual pixel visible at display resolution.
+    """
+    h, w = gray.shape
+    cy, cx = h // 2, w // 2
+    r = min(zoom, h, w) // 2
+    patch = gray[cy - r:cy + r, cx - r:cx + r]
     kernel = tp.SRM_KERNELS[4]          # KV square kernel -> screen pixel-grid cue
-    res = ndimage.convolve(gray / 255.0, kernel, mode="reflect")
+    res = ndimage.convolve(patch / 255.0, kernel, mode="reflect")
     return np.clip(res, -0.3, 0.3)
 
 
@@ -81,11 +93,13 @@ def panel_row(ax_row, path: Path, label: str):
     ax_row[0].set_ylabel(label, fontsize=13, fontweight="bold")
     ax_row[0].set_title("original", fontsize=11)
 
-    ax_row[1].imshow(fft_spectrum(gray), cmap="inferno")
+    ax_row[1].imshow(fft_spectrum(gray), cmap="inferno", interpolation="nearest")
     ax_row[1].set_title("FFT spectrum (moire)", fontsize=11)
 
-    ax_row[2].imshow(srm_grid_residual(gray), cmap="gray")
-    ax_row[2].set_title("SRM residual (screen grid)", fontsize=11)
+    srm = srm_grid_residual(gray)
+    vmin, vmax = np.percentile(srm, 2), np.percentile(srm, 98)
+    ax_row[2].imshow(srm, cmap="gray", interpolation="nearest", vmin=vmin, vmax=vmax)
+    ax_row[2].set_title("SRM residual (zoom, screen grid)", fontsize=11)
 
     ax_row[3].imshow(specular_overlay(rgb))
     ax_row[3].set_title("specular mask (glare)", fontsize=11)
