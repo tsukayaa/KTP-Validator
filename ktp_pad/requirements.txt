@@ -3,3 +3,5 @@ scipy
 lightgbm
 scikit-learn
 pillow
+matplotlib
+python-pptx
