@@ -479,8 +479,36 @@ def _refine_box(V, C, box, frac=0.30, min_step=0.035):
     return int(y0), int(y1), int(x0), int(x1)
 
 
+_CARD_AREA = (0.06, 0.72)     # plausible card box as a fraction of the frame
+_CARD_ASPECT_MAX = 2.30       # KTP is 1.585; allows perspective, rejects frame-shaped boxes
+_CARD_ASPECT_GOOD = 0.40      # |aspect - KTP_ASPECT| below this = stop raising the threshold
+
+
+def _box_from(m: np.ndarray):
+    """Largest filled component of `m` -> ((y0,y1,x0,x1), fill ratio) or None.
+
+    `fill` is the component's own area over its bounding box. A card photographed
+    roughly square-on fills its box; a box that has swallowed several unrelated
+    background regions does not. It is the only self-check available without labels.
+    """
+    m = ndimage.binary_closing(m, np.ones((5, 5), bool), iterations=2)
+    m = ndimage.binary_fill_holes(m)
+    lab, n = ndimage.label(m)
+    if n == 0:
+        return None
+    sizes = ndimage.sum(m, lab, index=np.arange(1, n + 1))
+    c = lab == (int(np.argmax(sizes)) + 1)
+    ys, xs = np.nonzero(c)
+    box = (int(ys.min()), int(ys.max()), int(xs.min()), int(xs.max()))
+    if box[1] - box[0] < 8 or box[3] - box[2] < 8:
+        return None
+    area = (box[1] - box[0] + 1) * (box[3] - box[2] + 1)
+    return box, float(c.sum()) / float(area)
+
+
 def find_card(rgb: np.ndarray):
-    """Locate the KTP by PRINT STRUCTURE, not by colour. -> (mask, (y0,y1,x0,x1)) or None.
+    """Locate the KTP by PRINT STRUCTURE, not by colour.
+    -> (mask, (y0,y1,x0,x1), fill, ok) or None.
 
     Colour-based segmentation fails on this data: KTP blue varies with print run,
     fading, white-balance and photocopies, and a displayed card takes the panel's
@@ -499,34 +527,58 @@ def find_card(rgb: np.ndarray):
       which is structurally wrong -- an over-cropped frame is nearly all card, so a
       p50 anchor sits inside the card and the threshold comes out far too high.
       Replaced with Otsu (see _otsu).
+
+    A SINGLE Otsu threshold was still not enough, which the real-data overlays showed:
+    of ten sampled images only three boxes landed on the card. Two swallowed the whole
+    frame -- and the reviewer confirmed those frames had a WIDE visible background, so
+    this is not the "card fills the frame" limitation, it is Otsu cutting too low and
+    letting background texture join the card component. Three more came back roughly
+    1.4x the card. Meanwhile `cd_found` reported 99% on both classes, because it only
+    ever meant "the function returned something".
+
+    So: sweep the threshold upward from Otsu and keep the first box that is actually
+    card-SHAPED. Raising the cut peels background texture off the component before it
+    touches the print, which is denser. The plausibility test is the ID-1 aspect ratio
+    plus an area range -- both are properties of a card, not of a class, so this stays
+    class-neutral. When nothing plausible turns up the best candidate is still returned
+    with ok=0 rather than dropped, so `cd_ok` can gate honestly instead of hiding the
+    failure behind a None.
     """
     h, w = rgb.shape[:2]
     V = rgb.mean(axis=2) / 255.0
+    C = (rgb.max(axis=2) - rgb.min(axis=2)) / 255.0    # chroma, for the white-desk case
     gy, gx = np.gradient(ndimage.gaussian_filter(V, 1.2))
     k = max(5, int(0.025 * min(h, w)))
     E = ndimage.uniform_filter(np.hypot(gx, gy), k)
     if float(E.max() - E.min()) < 1e-6:
         return None                                   # featureless frame, nothing to find
-    m = E > _otsu(E)
-    m = ndimage.binary_closing(m, np.ones((5, 5), bool), iterations=2)
-    m = ndimage.binary_fill_holes(m)
-    lab, n = ndimage.label(m)
-    if n == 0:
+
+    t0, hi = _otsu(E), float(E.max())
+    best = None
+    for step in (0.0, 0.15, 0.30, 0.45, 0.60):
+        got = _box_from(E > t0 + step * (hi - t0))
+        if got is None:
+            continue
+        y0, y1, x0, x1 = _refine_box(V, C, got[0])
+        bh, bw = y1 - y0 + 1, x1 - x0 + 1
+        if bh < 8 or bw < 8:
+            continue
+        area = bh * bw / float(h * w)
+        asp = max(bh, bw) / float(min(bh, bw))
+        dev = abs(asp - KTP_ASPECT)
+        ok = _CARD_AREA[0] <= area <= _CARD_AREA[1] and asp <= _CARD_ASPECT_MAX
+        # A plausible box always beats an implausible one, whatever their aspects.
+        score = dev + (0.0 if ok else 100.0)
+        if best is None or score < best[0]:
+            best = (score, (y0, y1, x0, x1), got[1], ok)
+        if ok and dev < _CARD_ASPECT_GOOD:
+            break                                     # good enough; stop peeling
+    if best is None:
         return None
-    sizes = ndimage.sum(m, lab, index=np.arange(1, n + 1))
-    c = lab == (int(np.argmax(sizes)) + 1)
-    ys, xs = np.nonzero(c)
-    box = (int(ys.min()), int(ys.max()), int(xs.min()), int(xs.max()))
-    if box[1] - box[0] < 8 or box[3] - box[2] < 8:
-        return None
-    C = (rgb.max(axis=2) - rgb.min(axis=2)) / 255.0    # chroma, for the white-desk case
-    y0, y1, x0, x1 = _refine_box(V, C, box)
-    bh, bw = y1 - y0 + 1, x1 - x0 + 1
-    if bh * bw / float(h * w) < 0.05 or max(bh, bw) / float(min(bh, bw)) > 2.6:
-        return None                                   # too small / nothing card-shaped
+    _, (y0, y1, x0, x1), fill, ok = best
     mask = np.zeros(V.shape, bool)
     mask[y0:y1 + 1, x0:x1 + 1] = True     # card = the refined rectangle, blank margin included
-    return mask, (y0, y1, x0, x1)
+    return mask, (y0, y1, x0, x1), float(fill), bool(ok)
 
 
 def _slice_area(s) -> int:
@@ -551,7 +603,7 @@ def _strips(shape, box, pad):
 
 
 CD_NAMES = [
-    "cd_found", "cd_area", "cd_fill", "cd_aspect", "cd_aspect_dev",
+    "cd_found", "cd_ok", "cd_area", "cd_fill", "cd_aspect", "cd_aspect_dev",
     "cd_margin_l", "cd_margin_r", "cd_margin_t", "cd_margin_b",
     "cd_margin_min", "cd_margin_mean", "cd_nsides_open",
 ]
@@ -581,12 +633,17 @@ def feat_card(rgb: np.ndarray):
     got = find_card(rgb)
     if got is None:
         return [f[k] for k in names], list(names)
-    cmask, (y0, y1, x0, x1) = got
+    cmask, (y0, y1, x0, x1), fill, ok = got
 
-    f["cd_found"] = 1.0
+    f["cd_found"] = 1.0     # "the function returned a box" — NOT a quality claim
+    f["cd_ok"] = float(ok)  # "the box is card-SHAPED" — the gate to actually trust
     bh, bw = y1 - y0 + 1, x1 - x0 + 1
     f["cd_area"] = bh * bw / float(h * w)
-    f["cd_fill"] = float(cmask.sum()) / float(bh * bw)
+    # Was `cmask.sum() / (bh*bw)` and therefore identically 1.0 for every image, since
+    # cmask IS the filled rectangle. Dead by construction — it showed up in the real run
+    # as AUC 0.496 in all four columns, byte-identical to cd_found and sr_nstrips, which
+    # is the signature of a constant feature. Now the component's own fill of its box.
+    f["cd_fill"] = fill
     asp = max(bh, bw) / float(min(bh, bw))
     f["cd_aspect"] = asp
     f["cd_aspect_dev"] = abs(asp - KTP_ASPECT)
@@ -668,10 +725,37 @@ FB_NAMES = [
     "fb_run_l", "fb_run_r", "fb_run_t", "fb_run_b", "fb_run_max",
     "fb_nsides", "fb_sym_lr", "fb_sym_tb",
     "fb_extent", "fb_edge_jitter", "fb_inner_grad",
-    "fb_v", "fb_flat", "fb_struct", "fb_detail", "fb_kurt",
+    "fb_v", "fb_contrast", "fb_flat", "fb_struct", "fb_detail", "fb_kurt",
     "fb_chroma", "fb_bluecast", "fb_rgbcos",
 ]
 _FB_COVER = 0.75          # a line counts as "in the run" if this fraction of it is dark
+_FB_DARK = 0.22           # "dark" ceiling — see _dark_cut. One knob, tune here.
+
+
+def _dark_cut(V: np.ndarray) -> float:
+    """Threshold for "as dark as an unlit panel", anchored to the bright content.
+
+    The first version was `clip(0.45 * p90, 0.08, 0.45)` and the real-data run showed
+    exactly how wrong that is. On a well-lit photo p90 is ~0.9, so the cut lands near
+    0.40 -- MID-GREY. A wooden desk, a concrete floor, dark jeans all fall below it.
+    The frame-run gate fired on 37.3% of genuine images, and the reviewer's verdict on
+    those overlays was that the runs sat on ordinary background that was "not even a
+    dark colour".
+
+    The AUC table said the same thing independently: with labels 1 = spoof, `fb_v`
+    inside its own subpopulation came out 0.176, i.e. the runs found on genuine frames
+    are markedly BRIGHTER than those on spoof frames. That is not a discovery about
+    genuine images, it is the loose threshold showing up as apparent signal.
+
+    An unlit LCD sits around V 0.05-0.12; 0.22 keeps that with headroom and excludes
+    mid-tones. The p90 anchor is kept so an underexposed frame still scales down, but
+    it can now only ever LOWER the cut, never raise it above _FB_DARK.
+
+    Falsifiable prediction of this change: the genuine `fb_run_max>0` rate should fall
+    from 37.3% to well under 15% while spoof stays above 70%. If spoof falls too, the
+    bars are not as dark as assumed and _FB_DARK is the wrong knob.
+    """
+    return float(np.clip(_FB_DARK * float(np.percentile(V, 90)), 0.04, _FB_DARK))
 
 
 def _run_len(cover: np.ndarray) -> int:
@@ -682,7 +766,7 @@ def _run_len(cover: np.ndarray) -> int:
 
 def frame_runs(V: np.ndarray):
     """(run depths in px per side, dark mask). Depths are 0 when the edge is not dark."""
-    m = V < float(np.clip(0.45 * float(np.percentile(V, 90)), 0.08, 0.45))
+    m = V < _dark_cut(V)
     col, row = m.mean(axis=0), m.mean(axis=1)
     return {"l": _run_len(col), "r": _run_len(col[::-1]),
             "t": _run_len(row), "b": _run_len(row[::-1])}, m
@@ -725,6 +809,13 @@ def feat_frame(rgb: np.ndarray):
     core = _core(reg)                                 # interior only — see _core
     vd = V[core]
     f["fb_v"] = float(vd.mean())
+    # How much darker the run is than everything else. fb_v alone is an EXPOSURE
+    # statistic -- a dim photo makes every region dark -- which is why the loose
+    # threshold could turn it into fake signal (see _dark_cut). The difference is
+    # level-independent: a panel is far below its surroundings whatever the exposure,
+    # a merely dim background is not.
+    if (~reg).any():
+        f["fb_contrast"] = float(np.median(V[~reg]) - vd.mean())
     ys, xs = np.nonzero(core)
     A = np.stack([xs, ys, np.ones(xs.size)], axis=1).astype(np.float64)
     sol, *_ = np.linalg.lstsq(A, vd.astype(np.float64), rcond=None)

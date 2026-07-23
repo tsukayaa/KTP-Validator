@@ -119,8 +119,11 @@ def save_overlay(path: Path, dst: Path):
     card = base.copy()
     got = find_card(rgb)
     if got is not None:
-        cmask, box = got
-        _tint(card, cmask, (0.2, 1.0, 0.3), 0.30)                # card = green
+        cmask, box, _fill, cok = got
+        # green = the box passed the card-shape test, magenta = best effort, ok=0.
+        # A run where most boxes come back magenta means find_card is the bottleneck,
+        # not the features downstream of it.
+        _tint(card, cmask, (0.2, 1.0, 0.3) if cok else (1.0, 0.2, 0.9), 0.30)
         st = _strips(V.shape, box, max(4, int(0.06 * max(V.shape))))
         if st:
             means = {k: float(V[s].mean()) for k, s in st.items()}
@@ -191,12 +194,18 @@ def main():
     X = np.nan_to_num(np.array(rows, dtype=np.float64))
     y = np.array(labels)
     present = X[:, MACRO_NAMES.index("dk_present")] == 1.0
-    found = X[:, MACRO_NAMES.index("cd_found")] == 1.0
+    # cd_OK, not cd_found. cd_found only means "the function returned a box": it read
+    # 99.9% / 99.1% on the real data while the overlays showed 3 boxes in 10 actually
+    # on the card, so gating on it is gating on nothing -- the cd-sub column came back
+    # equal to `all` to three decimals. cd_ok is the card-shape test.
+    found = X[:, MACRO_NAMES.index("cd_ok")] == 1.0
+    raw_found = X[:, MACRO_NAMES.index("cd_found")] == 1.0
     run = X[:, MACRO_NAMES.index("fb_run_max")] > 0.01
 
     n_gen, n_spf = int((y == 0).sum()), int((y == 1).sum())
     gp, sp = int((present & (y == 0)).sum()), int((present & (y == 1)).sum())
     gf, sf = int((found & (y == 0)).sum()), int((found & (y == 1)).sum())
+    grf, srf = int((raw_found & (y == 0)).sum()), int((raw_found & (y == 1)).sum())
     gr, sr_ = int((run & (y == 0)).sum()), int((run & (y == 1)).sum())
 
     L = []
@@ -207,7 +216,9 @@ def main():
     L.append("|---|---|---|---|---|")
     L.append(f"| dk_present (dark blob) | {gp} | {sp} | {gp/max(n_gen,1):.1%} | "
              f"{sp/max(n_spf,1):.1%} |")
-    L.append(f"| cd_found (card located) | {gf} | {sf} | {gf/max(n_gen,1):.1%} | "
+    L.append(f"| cd_found (box returned) | {grf} | {srf} | {grf/max(n_gen,1):.1%} | "
+             f"{srf/max(n_spf,1):.1%} |")
+    L.append(f"| cd_ok (box is card-shaped) | {gf} | {sf} | {gf/max(n_gen,1):.1%} | "
              f"{sf/max(n_spf,1):.1%} |")
     L.append(f"| fb_run_max>0 (dark frame edge) | {gr} | {sr_} | {gr/max(n_gen,1):.1%} | "
              f"{sr_/max(n_spf,1):.1%} |")
