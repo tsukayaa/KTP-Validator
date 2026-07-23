@@ -33,6 +33,11 @@ from scipy.stats import kurtosis
 import lightgbm as lgb
 from sklearn.model_selection import train_test_split
 
+try:                                        # run as a script (python ktp_pad/train_pad.py)
+    from features_macro import feat_macro, load_macro
+except ImportError:                         # imported as a package
+    from .features_macro import feat_macro, load_macro
+
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data2"
 MODELS = ROOT / "models"
@@ -207,7 +212,13 @@ def feat_blockiness(gray):
 
 
 def extract_features(path: Path):
-    """All groups concatenated -> (np.float32 vector, names) or (None, None) on failure."""
+    """All groups concatenated -> (np.float32 vector, names) or (None, None) on failure.
+
+    Two different views of the same file, deliberately:
+      texture groups  -> native-resolution CENTER CROP (resizing kills moire/SRM)
+      macro groups    -> FULL frame downscaled (the center crop would cut off the
+                         very border evidence dk_*/oc_* are about)
+    """
     try:
         gray = load_gray(path)
         rgb = load_rgb(path)
@@ -216,6 +227,7 @@ def extract_features(path: Path):
             f, n = fn(gray); feats += f; names += n
         for fn in (feat_specular, feat_color):
             f, n = fn(rgb); feats += f; names += n
+        f, n = feat_macro(load_macro(path)); feats += f; names += n
         arr = np.nan_to_num(np.array(feats, dtype=np.float32), nan=0.0, posinf=0.0, neginf=0.0)
         return arr, names
     except Exception as e:                          # corrupt / unreadable image
